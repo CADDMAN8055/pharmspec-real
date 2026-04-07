@@ -1,227 +1,331 @@
 /**
- * PharmSpec AI - Automatic Spectral Peak Detector
- * Extracts peaks from MS/NMR spectral images using HTML5 Canvas
+ * PharmSpec AI - Advanced Spectral Peak Detector
+ * Detects ALL peaks from MS/NMR images including small peaks
+ * Critical for sensitive drug analysis
  */
 
 class SpectralPeakDetector {
     constructor() {
         this.canvas = document.createElement('canvas');
         this.ctx = this.canvas.getContext('2d');
-        this.minPeakHeight = 20; // Minimum peak height in pixels
-        this.smoothingWindow = 5; // Smoothing window size
+        // SENSITIVE settings for drug analysis - detect ALL peaks
+        this.minPeakHeight = 5;        // Very low threshold
+        this.minPeakProminence = 3;    // Minimum prominence
+        this.smoothingWindow = 3;      // Minimal smoothing
+        this.noiseThreshold = 2;       // Noise filtering
+        this.maxPeaks = 100;           // Detect up to 100 peaks
+        this.minDistance = 3;          // Minimum pixels between peaks
     }
 
     /**
-     * Load image and extract peaks
+     * Extract ALL peaks from spectral image
      * @param {HTMLImageElement} img - The spectral image
      * @param {string} type - 'ms' or 'nmr'
-     * @returns {Promise<Array>} Array of detected peaks
+     * @returns {Promise<Array>} All detected peaks sorted by position
      */
-    async extractPeaks(img, type = 'ms') {
-        // Set canvas size to match image
+    async extractPeaks(img, type = 'nmr1h') {
         this.canvas.width = img.width;
         this.canvas.height = img.height;
         
-        // Draw image on canvas
         this.ctx.drawImage(img, 0, 0);
         
-        // Get image data
         const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
-        const data = imageData.data;
         
-        // Find the spectral line (assuming dark line on light background)
-        const spectralLine = this.findSpectralLine(data, this.canvas.width, this.canvas.height);
+        // Extract spectral trace
+        const trace = this.extractTrace(imageData, this.canvas.width, this.canvas.height);
         
-        if (!spectralLine || spectralLine.length === 0) {
-            console.warn('No spectral line detected');
+        if (!trace || trace.length === 0) {
+            console.warn('No spectral trace found');
             return [];
         }
         
-        // Detect peaks in the spectral line
-        const peaks = this.detectPeaksInLine(spectralLine);
+        // Detect ALL peaks with high sensitivity
+        const peaks = this.findAllPeaks(trace);
         
-        // Map to actual values (requires axis detection)
-        const mappedPeaks = this.mapToValues(peaks, type, this.canvas.width);
+        // Map to chemical values
+        const mappedPeaks = this.mapToChemicalValues(peaks, type, this.canvas.width);
         
+        console.log(`Detected ${mappedPeaks.length} peaks`);
         return mappedPeaks;
     }
 
     /**
-     * Find the spectral line by scanning for dark pixels
+     * Extract spectral trace by finding the signal line
      */
-    findSpectralLine(data, width, height) {
-        const line = [];
+    extractTrace(data, width, height) {
+        const trace = [];
         
-        // For each x position, find the lowest dark pixel (highest y value)
-        for (let x = 0; x < width; x += 2) { // Skip every other pixel for speed
-            let minY = height;
-            let minBrightness = 255;
+        // For each x column, find the spectral signal
+        for (let x = 0; x < width; x += 1) {
+            const columnValues = [];
             
-            // Scan vertical column
+            // Scan entire column
             for (let y = 0; y < height; y++) {
                 const idx = (y * width + x) * 4;
-                const r = data[idx];
-                const g = data[idx + 1];
-                const b = data[idx + 2];
-                
-                // Calculate brightness (0-255)
-                const brightness = (r + g + b) / 3;
-                
-                // Look for dark pixels (spectral line)
-                if (brightness < 100 && brightness < minBrightness) {
-                    minBrightness = brightness;
-                    minY = y;
-                }
+                // Calculate darkness (spectral lines are dark)
+                const darkness = 255 - ((data.data[idx] + data.data[idx+1] + data.data[idx+2]) / 3);
+                columnValues.push({y, darkness});
             }
             
-            // Invert y (higher on canvas = lower y value, but we want intensity)
-            // Actually, spectral peaks point UP, so lower y = higher peak
-            if (minY < height) {
-                line.push({
+            // Find the baseline (average of bottom 20%)
+            const sorted = [...columnValues].sort((a, b) => a.darkness - b.darkness);
+            const baseline = sorted.slice(0, Math.floor(sorted.length * 0.2))
+                .reduce((sum, v) => sum + v.darkness, 0) / Math.floor(sorted.length * 0.2);
+            
+            // Find all dark pixels above baseline
+            const peaks = columnValues.filter(v => v.darkness > baseline + this.noiseThreshold);
+            
+            if (peaks.length > 0) {
+                // Take the darkest point (highest peak)
+                const darkest = peaks.reduce((max, v) => v.darkness > max.darkness ? v : max);
+                trace.push({
                     x: x,
-                    y: minY,
-                    intensity: height - minY // Invert: top of image = high intensity
+                    y: darkest.y,
+                    intensity: darkest.darkness - baseline,
+                    rawIntensity: darkest.darkness
+                });
+            } else {
+                // No signal - use baseline
+                trace.push({
+                    x: x,
+                    y: height - 1,
+                    intensity: 0,
+                    rawIntensity: baseline
                 });
             }
         }
         
-        return line;
+        return trace;
     }
 
     /**
-     * Detect peaks by finding local maxima
+     * Find ALL peaks using second derivative method
      */
-    detectPeaksInLine(line) {
+    findAllPeaks(trace) {
+        // Extract intensity profile
+        const intensities = trace.map(t => t.intensity);
+        
+        // Smooth slightly to reduce noise
+        const smoothed = this.smooth(intensities, this.smoothingWindow);
+        
+        // Calculate first derivative
+        const firstDerivative = [];
+        for (let i = 1; i < smoothed.length; i++) {
+            firstDerivative.push(smoothed[i] - smoothed[i-1]);
+        }
+        
+        // Calculate second derivative
+        const secondDerivative = [];
+        for (let i = 1; i < firstDerivative.length; i++) {
+            secondDerivative.push(firstDerivative[i] - firstDerivative[i-1]);
+        }
+        
+        // Find peaks: second derivative < 0 (concave down) AND first derivative crosses 0
         const peaks = [];
-        const windowSize = 10; // Minimum distance between peaks
-        
-        // Smooth the line
-        const smoothed = this.smoothLine(line.map(p => p.intensity), this.smoothingWindow);
-        
-        // Find local maxima
-        for (let i = windowSize; i < smoothed.length - windowSize; i++) {
-            let isMax = true;
-            const currentValue = smoothed[i];
+        for (let i = 2; i < secondDerivative.length - 2; i++) {
+            const prevSlope = firstDerivative[i-1];
+            const currSlope = firstDerivative[i];
+            const curvature = secondDerivative[i];
             
-            // Check if this is a local maximum
-            for (let j = i - windowSize; j <= i + windowSize; j++) {
-                if (j !== i && smoothed[j] > currentValue) {
-                    isMax = false;
-                    break;
-                }
-            }
-            
-            // Check minimum peak height
-            if (isMax && currentValue > this.minPeakHeight) {
-                // Avoid duplicate peaks too close together
-                const lastPeak = peaks[peaks.length - 1];
-                if (!lastPeak || (i - lastPeak.index) > windowSize) {
-                    peaks.push({
-                        index: i,
-                        x: line[i].x,
-                        intensity: Math.round((currentValue / Math.max(...smoothed)) * 100)
-                    });
+            // Peak criteria:
+            // 1. Slope changes from positive to negative (crosses zero)
+            // 2. Negative curvature (concave down)
+            // 3. Sufficient height
+            if (prevSlope > 0 && currSlope <= 0 && curvature < -0.5) {
+                const traceIdx = i + 2;
+                const peakHeight = smoothed[traceIdx];
+                
+                // Check minimum height
+                if (peakHeight > this.minPeakHeight) {
+                    // Check prominence - how much above local baseline
+                    const leftBaseline = this.findLocalMinimum(smoothed, traceIdx, -20);
+                    const rightBaseline = this.findLocalMinimum(smoothed, traceIdx, 20);
+                    const localBaseline = Math.max(leftBaseline, rightBaseline);
+                    const prominence = peakHeight - localBaseline;
+                    
+                    if (prominence > this.minPeakProminence) {
+                        // Check not too close to previous peak
+                        const lastPeak = peaks[peaks.length - 1];
+                        if (!lastPeak || (traceIdx - lastPeak.index) >= this.minDistance) {
+                            peaks.push({
+                                index: traceIdx,
+                                x: trace[traceIdx].x,
+                                y: trace[traceIdx].y,
+                                intensity: Math.round((peakHeight / Math.max(...smoothed)) * 100),
+                                prominence: prominence
+                            });
+                        }
+                    }
                 }
             }
         }
         
-        return peaks;
+        // Sort by position (x-axis)
+        return peaks.sort((a, b) => a.x - b.x);
     }
 
     /**
-     * Smooth data using moving average
+     * Find local minimum in smoothed data
      */
-    smoothLine(data, windowSize) {
+    findLocalMinimum(data, center, range) {
+        const start = Math.max(0, center + range);
+        const end = Math.min(data.length - 1, center + (range > 0 ? range : -range));
+        
+        let min = data[center];
+        for (let i = Math.min(start, end); i <= Math.max(start, end); i++) {
+            if (data[i] < min) min = data[i];
+        }
+        return min;
+    }
+
+    /**
+     * Smooth data using Savitzky-Golay filter approximation
+     */
+    smooth(data, windowSize) {
         const smoothed = [];
         const halfWindow = Math.floor(windowSize / 2);
         
         for (let i = 0; i < data.length; i++) {
             let sum = 0;
-            let count = 0;
+            let weightSum = 0;
             
-            for (let j = Math.max(0, i - halfWindow); j <= Math.min(data.length - 1, i + halfWindow); j++) {
-                sum += data[j];
-                count++;
+            for (let j = -halfWindow; j <= halfWindow; j++) {
+                const idx = i + j;
+                if (idx >= 0 && idx < data.length) {
+                    // Gaussian weight
+                    const weight = Math.exp(-(j * j) / (2 * halfWindow * halfWindow));
+                    sum += data[idx] * weight;
+                    weightSum += weight;
+                }
             }
             
-            smoothed.push(sum / count);
+            smoothed.push(sum / weightSum);
         }
         
         return smoothed;
     }
 
     /**
-     * Map pixel positions to actual m/z or ppm values
-     * This is simplified - real implementation would need axis OCR
+     * Map pixel positions to chemical values (ppm or m/z)
      */
-    mapToValues(peaks, type, imageWidth) {
-        // Simplified mapping assuming:
-        // - MS: x-axis from 50 to 1000 m/z
-        // - NMR: x-axis from 0 to 12 ppm
+    mapToChemicalValues(peaks, type, imageWidth) {
+        // Define axis ranges based on spectrum type
+        let minVal, maxVal, isReversed;
         
-        const minX = 0;
-        const maxX = imageWidth;
-        
-        let minValue, maxValue;
-        
-        if (type === 'ms') {
-            minValue = 50;
-            maxValue = 500;
-        } else if (type === 'nmr1h') {
-            minValue = 0;
-            maxValue = 12;
-        } else {
-            minValue = 0;
-            maxValue = 200;
+        switch(type) {
+            case 'nmr1h':
+                minVal = 0;      // 0 ppm
+                maxVal = 12;     // 12 ppm
+                isReversed = true; // NMR goes right-to-left
+                break;
+            case 'nmr13c':
+                minVal = 0;
+                maxVal = 220;
+                isReversed = true;
+                break;
+            case 'ms':
+                minVal = 50;     // 50 m/z
+                maxVal = 1000;   // 1000 m/z
+                isReversed = false;
+                break;
+            default:
+                minVal = 0;
+                maxVal = 10;
+                isReversed = false;
         }
         
         return peaks.map(peak => {
-            const normalizedX = (peak.x - minX) / (maxX - minX);
-            // For NMR, x-axis typically goes right-to-left (high to low ppm)
-            const value = type === 'nmr1h' 
-                ? maxValue - (normalizedX * (maxValue - minValue))
-                : minValue + (normalizedX * (maxValue - minValue));
+            const normalizedPos = peak.x / imageWidth;
+            
+            let value;
+            if (isReversed) {
+                // Right to left (NMR)
+                value = maxVal - (normalizedPos * (maxVal - minVal));
+            } else {
+                // Left to right (MS)
+                value = minVal + (normalizedPos * (maxVal - minVal));
+            }
             
             return {
                 x: peak.x,
-                [type === 'ms' ? 'mz' : 'ppm']: Math.round(value * 100) / 100,
-                intensity: peak.intensity
+                position: Math.round(value * 100) / 100,
+                intensity: peak.intensity,
+                type: type === 'ms' ? 'mz' : 'ppm'
             };
-        });
+        }).slice(0, this.maxPeaks);
     }
 
     /**
-     * Visualize detected peaks on canvas
+     * Visualize detected peaks on the spectrum
      */
     visualizePeaks(img, peaks, type) {
         this.canvas.width = img.width;
         this.canvas.height = img.height;
+        
+        // Draw original image
         this.ctx.drawImage(img, 0, 0);
         
-        // Draw red circles at peak positions
-        this.ctx.strokeStyle = 'red';
+        // Draw peak markers
+        this.ctx.strokeStyle = '#ff0000';
+        this.ctx.fillStyle = '#ff0000';
         this.ctx.lineWidth = 2;
+        this.ctx.font = 'bold 11px Arial';
         
-        peaks.forEach(peak => {
+        peaks.forEach((peak, i) => {
             const x = peak.x;
-            const y = this.canvas.height - (peak.intensity / 100 * this.canvas.height * 0.8);
+            const y = 30; // Draw markers at top
             
+            // Draw circle at peak position (bottom of image)
+            const bottomY = this.canvas.height - 20;
             this.ctx.beginPath();
-            this.ctx.arc(x, y, 5, 0, 2 * Math.PI);
+            this.ctx.arc(x, bottomY, 4, 0, 2 * Math.PI);
+            this.ctx.stroke();
+            this.ctx.fill();
+            
+            // Draw vertical line
+            this.ctx.beginPath();
+            this.ctx.moveTo(x, bottomY - 10);
+            this.ctx.lineTo(x, bottomY + 10);
             this.ctx.stroke();
             
-            // Draw value label
-            this.ctx.fillStyle = 'red';
-            this.ctx.font = '12px Arial';
-            const label = type === 'ms' 
-                ? `${peak.mz.toFixed(1)}` 
-                : `${peak.ppm.toFixed(1)}`;
-            this.ctx.fillText(label, x - 10, y - 10);
+            // Draw value label (alternate above/below to avoid overlap)
+            const labelY = (i % 2 === 0) ? 25 : 45;
+            const label = peak.position.toFixed(type === 'ms' ? 1 : 2);
+            
+            // White background for text
+            const textWidth = this.ctx.measureText(label).width;
+            this.ctx.fillStyle = 'rgba(255,255,255,0.9)';
+            this.ctx.fillRect(x - textWidth/2 - 2, labelY - 10, textWidth + 4, 14);
+            
+            // Text
+            this.ctx.fillStyle = '#ff0000';
+            this.ctx.textAlign = 'center';
+            this.ctx.fillText(label, x, labelY);
         });
         
-        return this.canvas.toDataURL();
+        // Add peak count
+        this.ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        this.ctx.fillRect(10, 10, 150, 25);
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.textAlign = 'left';
+        this.ctx.font = 'bold 12px Arial';
+        this.ctx.fillText(`Detected: ${peaks.length} peaks`, 15, 27);
+        
+        return this.canvas.toDataURL('image/jpeg', 0.9);
+    }
+
+    /**
+     * Get peak list formatted for display
+     */
+    formatPeakList(peaks, type) {
+        if (type === 'ms') {
+            return peaks.map(p => `${p.position.toFixed(1)}(${p.intensity})`).join(', ');
+        } else {
+            // NMR - include multiplicity if we can detect it
+            return peaks.map(p => `${p.position.toFixed(2)}`).join(', ');
+        }
     }
 }
 
-// Export for use in app.js
+// Export
 window.SpectralPeakDetector = SpectralPeakDetector;

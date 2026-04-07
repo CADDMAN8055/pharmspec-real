@@ -94,6 +94,60 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const img = new Image();
             img.onload = async () => {
+                console.log('Starting peak detection...');
+                const detector = new SpectralPeakDetector();
+                const peaks = await detector.extractPeaks(img, spectrumType);
+                
+                console.log(`Detected ${peaks.length} peaks`);
+                
+                if (peaks.length > 0) {
+                    // Format peaks using the detector's method
+                    const peaksText = detector.formatPeakList(peaks, spectrumType);
+                    document.getElementById('imagePeaksInput').value = peaksText;
+                    
+                    // Show annotated image
+                    const annotatedImg = detector.visualizePeaks(img, peaks, spectrumType);
+                    document.getElementById('peakAnnotatedImg').src = annotatedImg;
+                    
+                    previewDiv.style.display = 'block';
+                    
+                    // Show success message
+                    alert(`✅ Auto-detected ${peaks.length} peaks! Please verify and edit if needed before analysis.`);
+                } else {
+                    document.getElementById('imagePeaksInput').value = '';
+                    document.getElementById('imagePeaksInput').placeholder = '⚠️ No peaks auto-detected. Please enter peaks manually from the spectrum.';
+                    previewDiv.style.display = 'block';
+                }
+                
+                statusDiv.style.display = 'none';
+            };
+            img.onerror = () => {
+                alert('Error loading image');
+                statusDiv.style.display = 'none';
+            };
+            img.src = imageSrc;
+        } catch (error) {
+            console.error('Peak extraction error:', error);
+            statusDiv.style.display = 'none';
+            previewDiv.style.display = 'block';
+            document.getElementById('imagePeaksInput').placeholder = 'Error in auto-detection. Please enter peaks manually.';
+        }
+    }
+        };
+        reader.readAsDataURL(file);
+    }
+    
+    async function autoExtractPeaks(imageSrc) {
+        const statusDiv = document.getElementById('autoExtractionStatus');
+        const previewDiv = document.getElementById('extractedPeaksPreview');
+        const spectrumType = document.getElementById('spectrumType').value;
+        
+        statusDiv.style.display = 'block';
+        previewDiv.style.display = 'none';
+        
+        try {
+            const img = new Image();
+            img.onload = async () => {
                 const detector = new SpectralPeakDetector();
                 const peaks = await detector.extractPeaks(img, spectrumType);
                 
