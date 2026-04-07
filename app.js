@@ -64,20 +64,68 @@ document.addEventListener('DOMContentLoaded', () => {
         resetImageUpload();
     });
     
-    function handleImageUpload(file) {
+    async function handleImageUpload(file) {
         if (!file.type.startsWith('image/') && file.type !== 'application/pdf') {
             alert('Please upload an image file (JPG, PNG, TIFF) or PDF');
             return;
         }
         
         const reader = new FileReader();
-        reader.onload = (e) => {
+        reader.onload = async (e) => {
             previewImg.src = e.target.result;
             imagePreview.classList.remove('hidden');
             uploadArea.classList.add('hidden');
             window.uploadedImage = file;
+            
+            // Auto-extract peaks from image
+            await autoExtractPeaks(e.target.result);
         };
         reader.readAsDataURL(file);
+    }
+    
+    async function autoExtractPeaks(imageSrc) {
+        const statusDiv = document.getElementById('autoExtractionStatus');
+        const previewDiv = document.getElementById('extractedPeaksPreview');
+        const spectrumType = document.getElementById('spectrumType').value;
+        
+        statusDiv.style.display = 'block';
+        previewDiv.style.display = 'none';
+        
+        try {
+            const img = new Image();
+            img.onload = async () => {
+                const detector = new SpectralPeakDetector();
+                const peaks = await detector.extractPeaks(img, spectrumType);
+                
+                if (peaks.length > 0) {
+                    // Format peaks for display
+                    let peaksText;
+                    if (spectrumType === 'ms') {
+                        peaksText = peaks.map(p => `${p.mz.toFixed(1)}(${p.intensity})`).join(', ');
+                    } else {
+                        peaksText = peaks.map(p => `${p.ppm.toFixed(2)}`).join(', ');
+                    }
+                    
+                    document.getElementById('imagePeaksInput').value = peaksText;
+                    
+                    // Show annotated image
+                    const annotatedImg = detector.visualizePeaks(img, peaks, spectrumType);
+                    document.getElementById('peakAnnotatedImg').src = annotatedImg;
+                    
+                    previewDiv.style.display = 'block';
+                } else {
+                    document.getElementById('imagePeaksInput').placeholder = 'No peaks auto-detected. Please enter manually.';
+                    previewDiv.style.display = 'block';
+                }
+                
+                statusDiv.style.display = 'none';
+            };
+            img.src = imageSrc;
+        } catch (error) {
+            console.error('Peak extraction error:', error);
+            statusDiv.style.display = 'none';
+            previewDiv.style.display = 'block';
+        }
     }
     
     function resetImageUpload() {
@@ -131,9 +179,21 @@ async function performAnalysis() {
     let nmrPeaks = [];
     
     // Parse input based on tab
-    if (activeTab === 'ms' || activeTab === 'image') {
+    if (activeTab === 'ms') {
         const msInput = document.getElementById('msInput').value.trim();
         if (msInput) msPeaks = parseMSInput(msInput);
+    }
+    
+    if (activeTab === 'image') {
+        const imagePeaks = document.getElementById('imagePeaksInput').value.trim();
+        const spectrumType = document.getElementById('spectrumType').value;
+        if (imagePeaks) {
+            if (spectrumType === 'ms') {
+                msPeaks = parseMSInput(imagePeaks);
+            } else if (spectrumType === 'nmr1h' || spectrumType === 'nmr13c') {
+                nmrPeaks = parseNMRInput(imagePeaks);
+            }
+        }
     }
     
     if (activeTab === 'nmr1h') {

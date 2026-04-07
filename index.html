@@ -62,9 +62,24 @@
                             </select>
                         </div>
 
+                        <div class="auto-extraction-status" id="autoExtractionStatus" style="display:none;">
+                            <div class="extraction-progress">
+                                <span class="spinner-small"></span>
+                                <span>🔬 Auto-detecting peaks from image...</span>
+                            </div>
+                        </div>
+
+                        <div class="extracted-peaks-preview" id="extractedPeaksPreview" style="display:none;">
+                            <label><strong>✅ Auto-Detected Peaks (verify before analysis):</strong></label>
+                            <div class="peak-preview-image">
+                                <img id="peakAnnotatedImg" src="" alt="Peaks detected">
+                            </div>
+                            <textarea id="imagePeaksInput" placeholder="Detected peaks will appear here..." rows="3"></textarea>
+                            <p class="edit-hint">✏️ You can edit the detected peaks above if needed</p>
+                        </div>
+
                         <div class="alert info" id="imageAlert">
-                            <strong>ℹ️ Image Processing:</strong> The app will attempt to detect peaks automatically. 
-                            For 100% accuracy, please verify and edit the extracted peaks before matching.
+                            <strong>ℹ️ Auto-Extraction:</strong> Peaks will be automatically detected from your image. Review and edit before analysis for best results.
                         </div>
                     </div>
                 </div>
@@ -261,6 +276,7 @@
     </div>
 
     <script src="database.js"></script>
+    <script src="image-peak-detector.js"></script>
     <script src="spectral-extractor.js"></script>
     <script src="app.js"></script>
 </body>
