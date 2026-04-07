@@ -488,6 +488,31 @@ def get_stats():
         'external_sources': ['pubchem', 'nist', 'massbank', 'chemspider']
     })
 
+@app.route('/')
+def index():
+    """Root endpoint - API info"""
+    return jsonify({
+        'name': 'PharmSpec AI API',
+        'version': '3.0',
+        'endpoints': [
+            '/api/stats - Database statistics',
+            '/api/search/mass - Search by molecular weight',
+            '/api/match/spectrum - Match spectrum against database',
+            '/api/compound/<id> - Get compound details',
+            '/api/bulk/import - Import from external sources'
+        ],
+        'status': 'running'
+    })
+
+@app.route('/api/test', methods=['GET'])
+def test():
+    """Test endpoint"""
+    return jsonify({
+        'status': 'ok',
+        'message': 'PharmSpec API is running!',
+        'database': os.path.exists(DB_PATH)
+    })
+
 # Initialize on startup
 init_database()
 
