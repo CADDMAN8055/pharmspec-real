@@ -1,5 +1,10 @@
-// PharmSpec AI - Real Spectral Database Matcher with Validation Dashboard
-// Uses Cosine Similarity Algorithm for spectral matching
+// PharmSpec AI v3.0 - Real Database Integration
+// Connects to backend API with millions of compounds from PubChem/NIST
+
+const API_BASE_URL = window.location.hostname === 'localhost' ? 
+    'http://localhost:5000/api' : '/api';
+
+const USE_API = true; // Set to false for offline mode with local database
 
 // Algorithm Documentation:
 // 1. Vector Normalization: Both spectra normalized to unit vector
@@ -28,8 +33,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const processingSection = document.getElementById('processingSection');
     const resultsSection = document.getElementById('resultsSection');
     
-    // Update database count
-    document.getElementById('dbCount').textContent = spectralDatabase.length;
+    // Load database stats
+    loadDatabaseStats();
     
     // Image Upload Handling
     uploadArea.addEventListener('click', () => fileInput.click());
@@ -70,8 +75,6 @@ document.addEventListener('DOMContentLoaded', () => {
             previewImg.src = e.target.result;
             imagePreview.classList.remove('hidden');
             uploadArea.classList.add('hidden');
-            
-            // Store for later use
             window.uploadedImage = file;
         };
         reader.readAsDataURL(file);
@@ -101,45 +104,39 @@ document.addEventListener('DOMContentLoaded', () => {
     newAnalysisBtn.addEventListener('click', resetAnalysis);
     exportBtn.addEventListener('click', exportReport);
     
-    // Display database compounds
+    // Display local database compounds as fallback
     displayDatabase();
 });
 
-function performAnalysis() {
-    // Get active tab
+async function loadDatabaseStats() {
+    try {
+        const response = await fetch(`${API_BASE_URL}/stats`);
+        if (response.ok) {
+            const stats = await response.json();
+            document.getElementById('dbCount').textContent = 
+                stats.total_compounds > 1000 ? 
+                `${(stats.total_compounds / 1000000).toFixed(1)}M` : 
+                stats.total_compounds.toLocaleString();
+        }
+    } catch (e) {
+        console.log('API not available, using local database');
+        document.getElementById('dbCount').textContent = spectralDatabase.length + '+';
+    }
+}
+
+async function performAnalysis() {
     const activeTab = document.querySelector('.tab-btn.active').dataset.tab;
     
     let msPeaks = [];
     let nmrPeaks = [];
-    let hasImage = false;
     
-    // Handle image input
-    if (activeTab === 'image' && window.uploadedImage) {
-        hasImage = true;
-        const spectrumType = document.getElementById('spectrumType').value;
-        
-        // In real implementation, this would:
-        // 1. Use OpenCV.js for peak detection
-        // 2. OCR for axis reading
-        // 3. Return extracted peaks
-        
-        // For demo, we'll prompt user to verify
-        const extractedPeaks = simulateImageExtraction(spectrumType);
-        
-        if (spectrumType === 'ms') {
-            msPeaks = extractedPeaks;
-        } else if (spectrumType === 'nmr1h') {
-            nmrPeaks = extractedPeaks;
-        }
-    }
-    
-    // Parse text input based on tab
-    if (activeTab === 'ms' || (activeTab === 'image' && msPeaks.length === 0)) {
+    // Parse input based on tab
+    if (activeTab === 'ms' || activeTab === 'image') {
         const msInput = document.getElementById('msInput').value.trim();
         if (msInput) msPeaks = parseMSInput(msInput);
     }
     
-    if (activeTab === 'nmr1h' || (activeTab === 'image' && nmrPeaks.length === 0)) {
+    if (activeTab === 'nmr1h') {
         const nmrInput = document.getElementById('nmrInput').value.trim();
         if (nmrInput) nmrPeaks = parseNMRInput(nmrInput);
     }
@@ -153,37 +150,54 @@ function performAnalysis() {
     }
     
     if (msPeaks.length === 0 && nmrPeaks.length === 0) {
-        alert('Please upload an image or enter spectral data');
+        alert('Please enter spectral data');
         return;
     }
     
-    // Show processing
     showProcessing();
     
-    // Perform matching (with delay for visual effect)
-    setTimeout(() => {
-        const results = performMatching(msPeaks, nmrPeaks);
-        showResults(results, msPeaks, nmrPeaks, hasImage);
-    }, 1500);
+    try {
+        let results;
+        
+        if (USE_API) {
+            // Use API backend with millions of compounds
+            results = await apiMatchSpectrum(msPeaks, nmrPeaks);
+        } else {
+            // Use local database (fallback)
+            results = performLocalMatching(msPeaks, nmrPeaks);
+        }
+        
+        showResults(results, msPeaks, nmrPeaks);
+    } catch (error) {
+        console.error('Analysis error:', error);
+        // Fallback to local matching
+        const results = performLocalMatching(msPeaks, nmrPeaks);
+        showResults(results, msPeaks, nmrPeaks);
+    }
 }
 
-function simulateImageExtraction(spectrumType) {
-    // Simulated extraction from image
-    // In real app, this would use OpenCV.js
-    if (spectrumType === 'ms') {
-        return [
-            { mz: 180.04, intensity: 100 },
-            { mz: 138.03, intensity: 35 },
-            { mz: 120.02, intensity: 45 }
-        ];
-    } else if (spectrumType === 'nmr1h') {
-        return [
-            { ppm: 11.0, mult: 's', int: 1 },
-            { ppm: 7.9, mult: 'dd', int: 1 },
-            { ppm: 2.3, mult: 's', int: 3 }
-        ];
-    }
-    return [];
+async function apiMatchSpectrum(msPeaks, nmrPeaks) {
+    const response = await fetch(`${API_BASE_URL}/match/spectrum`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            peaks: msPeaks,
+            type: 'ms',
+            tolerance: TOLERANCE_MZ,
+            top_k: 10
+        })
+    });
+    
+    if (!response.ok) throw new Error('API request failed');
+    
+    const data = await response.json();
+    return data.results.map(r => ({
+        compound: r.compound,
+        totalScore: r.score,
+        confidence: r.confidence,
+        matchData: { ms: { cosine: r.similarity, coverage: r.coverage } },
+        validationStatus: { status: r.status, class: r.status.toLowerCase() }
+    }));
 }
 
 function parseMSInput(input) {
@@ -221,58 +235,35 @@ function parseNMRInput(input) {
     return peaks;
 }
 
-// ============================================
-// COSINE SIMILARITY ALGORITHM
-// ============================================
-function performMatching(msPeaks, nmrPeaks) {
+// Local matching fallback
+function performLocalMatching(msPeaks, nmrPeaks) {
     const results = [];
     
     for (const compound of spectralDatabase) {
         let totalScore = 0;
-        let weights = 0;
-        let details = [];
         let matchData = { ms: null, nmr: null };
         
-        // MS Matching using Cosine Similarity
         if (msPeaks.length > 0 && compound.ms && compound.ms.fragments) {
             const msScore = calculateCosineSimilarity(msPeaks, compound.ms.fragments);
             matchData.ms = msScore;
-            
-            if (msScore.overall > 0) {
-                totalScore += msScore.overall * 0.6;
-                weights += 0.6;
-                details.push(`MS Cosine: ${msScore.cosine.toFixed(1)}%`);
-            }
+            if (msScore.overall > 0) totalScore += msScore.overall * 0.6;
         }
         
-        // NMR Matching
         if (nmrPeaks.length > 0 && compound.nmr1h) {
             const nmrScore = calculateNMRSimilarity(nmrPeaks, compound.nmr1h);
             matchData.nmr = nmrScore;
-            
-            if (nmrScore.overall > 0) {
-                totalScore += nmrScore.overall * 0.4;
-                weights += 0.4;
-                details.push(`NMR Match: ${nmrScore.coverage.toFixed(1)}%`);
-            }
+            if (nmrScore.overall > 0) totalScore += nmrScore.overall * 0.4;
         }
         
-        // Normalize score
-        if (weights > 0) {
-            totalScore /= weights;
-        }
-        
-        // Calculate confidence with validation criteria
-        const confidence = calculateConfidence(totalScore, matchData, weights);
+        const confidence = Math.min(totalScore * 1.05, 99.5);
+        const status = confidence >= 95 ? 'VALIDATED' : confidence >= 80 ? 'LIKELY' : 'UNLIKELY';
         
         results.push({
             compound: compound,
             totalScore: totalScore,
             confidence: confidence,
-            details: details,
             matchData: matchData,
-            inputPeaks: { ms: msPeaks, nmr: nmrPeaks },
-            validationStatus: getValidationStatus(confidence, matchData)
+            validationStatus: { status: status, class: status.toLowerCase() }
         });
     }
     
@@ -281,202 +272,101 @@ function performMatching(msPeaks, nmrPeaks) {
 
 function calculateCosineSimilarity(userPeaks, dbPeaks) {
     if (userPeaks.length === 0 || dbPeaks.length === 0) {
-        return { overall: 0, matched: 0, total: 0, cosine: 0 };
+        return { overall: 0, cosine: 0, coverage: 0 };
     }
     
-    // Normalize intensities to 0-100 scale
     const userMax = Math.max(...userPeaks.map(p => p.intensity));
     const dbMax = Math.max(...dbPeaks.map(p => p.intensity));
     
-    const normUserPeaks = userPeaks.map(p => ({
-        mz: p.mz,
-        intensity: (p.intensity / userMax) * 100
-    }));
+    const normUser = userPeaks.map(p => ({ mz: p.mz, intensity: (p.intensity / userMax) * 100 }));
+    const normDb = dbPeaks.map(p => ({ mz: p.mz, intensity: (p.intensity / dbMax) * 100 }));
     
-    const normDbPeaks = dbPeaks.map(p => ({
-        mz: p.mz,
-        intensity: (p.intensity / dbMax) * 100
-    }));
-    
-    // Calculate cosine similarity
     let dotProduct = 0;
     let userNorm = 0;
     let dbNorm = 0;
     let matched = 0;
-    const usedDbPeaks = new Set();
-    const matchedPairs = [];
+    const usedDb = new Set();
     
-    for (const uPeak of normUserPeaks) {
+    for (const u of normUser) {
         let bestMatch = null;
         let bestScore = 0;
         
-        for (let i = 0; i < normDbPeaks.length; i++) {
-            if (usedDbPeaks.has(i)) continue;
-            
-            const dPeak = normDbPeaks[i];
-            const mzDiff = Math.abs(uPeak.mz - dPeak.mz);
+        for (let i = 0; i < normDb.length; i++) {
+            if (usedDb.has(i)) continue;
+            const d = normDb[i];
+            const mzDiff = Math.abs(u.mz - d.mz);
             
             if (mzDiff <= TOLERANCE_MZ) {
-                const intensityMatch = Math.min(uPeak.intensity, dPeak.intensity) / 
-                                      Math.max(uPeak.intensity, dPeak.intensity);
-                const mzScore = 1 - (mzDiff / TOLERANCE_MZ);
-                const score = (intensityMatch * 0.7) + (mzScore * 0.3);
-                
+                const intensityMatch = Math.min(u.intensity, d.intensity) / Math.max(u.intensity, d.intensity);
+                const score = intensityMatch * (1 - mzDiff / TOLERANCE_MZ);
                 if (score > bestScore) {
                     bestScore = score;
-                    bestMatch = { index: i, peak: dPeak, score: score, mzDiff: mzDiff };
+                    bestMatch = i;
                 }
             }
         }
         
-        if (bestMatch) {
-            dotProduct += uPeak.intensity * bestMatch.peak.intensity;
-            usedDbPeaks.add(bestMatch.index);
+        if (bestMatch !== null) {
+            dotProduct += u.intensity * normDb[bestMatch].intensity;
+            usedDb.add(bestMatch);
             matched++;
-            matchedPairs.push({
-                user: uPeak,
-                db: bestMatch.peak,
-                score: bestMatch.score,
-                mzDiff: bestMatch.mzDiff
-            });
         }
         
-        userNorm += uPeak.intensity * uPeak.intensity;
+        userNorm += u.intensity * u.intensity;
     }
     
-    for (const dPeak of normDbPeaks) {
-        dbNorm += dPeak.intensity * dPeak.intensity;
-    }
+    for (const d of normDb) dbNorm += d.intensity * d.intensity;
     
     const cosine = (userNorm > 0 && dbNorm > 0) ? 
         (dotProduct / (Math.sqrt(userNorm) * Math.sqrt(dbNorm))) * 100 : 0;
     
     const coverage = (matched / Math.max(userPeaks.length, dbPeaks.length)) * 100;
-    const overall = (cosine * 0.7) + (coverage * 0.3);
     
-    return {
-        overall: overall,
-        cosine: cosine,
-        coverage: coverage,
-        matched: matched,
-        total: Math.max(userPeaks.length, dbPeaks.length),
-        matchedPairs: matchedPairs
-    };
+    return { overall: (cosine * 0.7) + (coverage * 0.3), cosine, coverage, matched };
 }
 
 function calculateNMRSimilarity(userPeaks, dbPeaks) {
-    if (userPeaks.length === 0 || dbPeaks.length === 0) {
-        return { overall: 0, matched: 0 };
-    }
+    if (userPeaks.length === 0 || dbPeaks.length === 0) return { overall: 0 };
     
     let matched = 0;
-    let totalShiftDiff = 0;
-    const usedDbPeaks = new Set();
+    const usedDb = new Set();
     
-    for (const uPeak of userPeaks) {
-        let bestMatch = null;
-        let minDiff = Infinity;
-        
+    for (const u of userPeaks) {
         for (let i = 0; i < dbPeaks.length; i++) {
-            if (usedDbPeaks.has(i)) continue;
-            
-            const dPeak = dbPeaks[i];
-            const diff = Math.abs(uPeak.ppm - dPeak.ppm);
-            
-            if (diff <= TOLERANCE_PPM && diff < minDiff) {
-                minDiff = diff;
-                bestMatch = { index: i, peak: dPeak };
+            if (usedDb.has(i)) continue;
+            if (Math.abs(u.ppm - dbPeaks[i].ppm) <= TOLERANCE_PPM) {
+                matched++;
+                usedDb.add(i);
+                break;
             }
-        }
-        
-        if (bestMatch) {
-            matched++;
-            totalShiftDiff += minDiff;
-            usedDbPeaks.add(bestMatch.index);
         }
     }
     
     const coverage = (matched / Math.max(userPeaks.length, dbPeaks.length)) * 100;
-    const accuracy = matched > 0 ? (1 - (totalShiftDiff / (matched * TOLERANCE_PPM))) * 100 : 0;
-    const overall = (coverage * 0.6) + (accuracy * 0.4);
-    
-    return {
-        overall: overall,
-        coverage: coverage,
-        accuracy: accuracy,
-        matched: matched,
-        total: Math.max(userPeaks.length, dbPeaks.length)
-    };
+    return { overall: coverage, coverage };
 }
 
-function calculateConfidence(score, matchData, weights) {
-    let confidence = score;
-    
-    // Boost for multi-spectral match
-    if (matchData.ms && matchData.nmr) {
-        confidence += 5;
-    }
-    
-    // Penalize for low coverage
-    if (matchData.ms && matchData.ms.coverage < 50) {
-        confidence *= 0.9;
-    }
-    
-    // Cap at 99.5% (scientific apps never claim 100% without absolute confirmation)
-    return Math.min(confidence, 99.5);
-}
-
-function getValidationStatus(confidence, matchData) {
-    if (confidence >= 95 && matchData.ms && matchData.ms.cosine > 90) {
-        return { status: 'VALIDATED', class: 'validated' };
-    } else if (confidence >= 80) {
-        return { status: 'LIKELY', class: 'likely' };
-    } else {
-        return { status: 'UNLIKELY', class: 'unlikely' };
-    }
-}
-
-// ============================================
-// UI FUNCTIONS
-// ============================================
+// UI Functions
 function showProcessing() {
     document.getElementById('inputSection').classList.add('hidden');
     document.getElementById('processingSection').classList.remove('hidden');
     
     const progressFill = document.getElementById('progressFill');
-    const steps = [
-        document.getElementById('procStep1'),
-        document.getElementById('procStep2'),
-        document.getElementById('procStep3')
-    ];
-    
     let progress = 0;
     const interval = setInterval(() => {
         progress += 5;
         progressFill.style.width = progress + '%';
-        
-        if (progress > 30) {
-            steps[0].classList.remove('active');
-            steps[1].classList.add('active');
-        }
-        if (progress > 70) {
-            steps[1].classList.remove('active');
-            steps[2].classList.add('active');
-        }
-        
-        if (progress >= 100) {
-            clearInterval(interval);
-        }
+        if (progress >= 100) clearInterval(interval);
     }, 75);
 }
 
-function showResults(results, msPeaks, nmrPeaks, hasImage) {
+function showResults(results, msPeaks, nmrPeaks) {
     document.getElementById('processingSection').classList.add('hidden');
     document.getElementById('resultsSection').classList.remove('hidden');
     
     const topResult = results[0];
     
-    // Show match quality
+    // Match quality
     const matchQuality = document.getElementById('matchQuality');
     const qualityClass = topResult.confidence >= 95 ? 'excellent' : 
                         topResult.confidence >= 80 ? 'good' : 'moderate';
@@ -491,7 +381,7 @@ function showResults(results, msPeaks, nmrPeaks, hasImage) {
         </div>
     `;
     
-    // Show top match
+    // Top match
     const topMatch = document.getElementById('topMatch');
     topMatch.innerHTML = `
         <div class="match-card ${topResult.validationStatus.class}">
@@ -501,23 +391,20 @@ function showResults(results, msPeaks, nmrPeaks, hasImage) {
                     ${topResult.validationStatus.status}
                 </span>
             </div>
-            
             <div class="match-score-bar">
                 <div class="score-bar" style="width: ${topResult.totalScore}%"></div>
                 <span>${topResult.totalScore.toFixed(1)}% Match Score</span>
             </div>
-            
             <div class="match-details">
                 <div class="detail-row"><span class="label">Formula:</span><span class="value">${topResult.compound.formula}</span></div>
                 <div class="detail-row"><span class="label">MW:</span><span class="value">${topResult.compound.mw} g/mol</span></div>
                 <div class="detail-row"><span class="label">SMILES:</span><code class="smiles">${topResult.compound.smiles}</code></div>
-                <div class="detail-row"><span class="label">IUPAC:</span><span class="value">${topResult.compound.iupac}</span></div>
-                <div class="detail-row"><span class="label">CAS:</span><span class="value">${topResult.compound.cas}</span></div>
+                <div class="detail-row"><span class="label">CAS:</span><span class="value">${topResult.compound.cas || 'N/A'}</span></div>
             </div>
         </div>
     `;
     
-    // Show Validation Matrix Dashboard
+    // Validation matrix
     const validationGrid = document.getElementById('validationGrid');
     validationGrid.innerHTML = `
         <div class="validation-item">
@@ -530,21 +417,11 @@ function showResults(results, msPeaks, nmrPeaks, hasImage) {
             <span class="val-value">${topResult.matchData.ms ? topResult.matchData.ms.coverage.toFixed(1) : 'N/A'}%</span>
             <span class="val-threshold">Threshold: >70%</span>
         </div>
-        <div class="validation-item">
-            <span class="val-label">Peaks Matched</span>
-            <span class="val-value">${topResult.matchData.ms ? topResult.matchData.ms.matched : 0}/${topResult.matchData.ms ? topResult.matchData.ms.total : 0}</span>
-            <span class="val-threshold">Tolerance: ±0.5 m/z</span>
-        </div>
-        <div class="validation-item">
-            <span class="val-label">MW Deviation</span>
-            <span class="val-value">${calculateMWDeviation(msPeaks, topResult.compound)} Da</span>
-            <span class="val-threshold">Tolerance: ±0.1 Da</span>
-        </div>
     `;
     
-    // Show all matches table
+    // Results table
     const tableBody = document.getElementById('matchesTableBody');
-    tableBody.innerHTML = results.slice(0, 5).map((r, i) => `
+    tableBody.innerHTML = results.slice(0, 10).map((r, i) => `
         <tr class="${i === 0 ? 'top-result' : ''} ${r.validationStatus.class}">
             <td>${i + 1}</td>
             <td><strong>${r.compound.name}</strong></td>
@@ -556,59 +433,11 @@ function showResults(results, msPeaks, nmrPeaks, hasImage) {
             <td><span class="status-badge ${r.validationStatus.class}">${r.validationStatus.status}</span></td>
         </tr>
     `).join('');
-    
-    // Show detailed peak matching analysis
-    const detailedAnalysis = document.getElementById('detailedAnalysis');
-    if (topResult.matchData.ms && topResult.matchData.ms.matchedPairs) {
-        detailedAnalysis.innerHTML = `
-            <h3>📊 Detailed Peak Matching Analysis</h3>
-            <table class="peak-table">
-                <thead>
-                    <tr><th>User m/z</th><th>DB m/z</th><th>Δ m/z</th><th>Int Match</th><th>Score</th></tr>
-                </thead>
-                <tbody>
-                    ${topResult.matchData.ms.matchedPairs.slice(0, 6).map(pair => `
-                        <tr>
-                            <td>${pair.user.mz.toFixed(2)}</td>
-                            <td>${pair.db.mz.toFixed(2)}</td>
-                            <td>${pair.mzDiff.toFixed(3)}</td>
-                            <td>${Math.min(pair.user.intensity, pair.db.intensity).toFixed(1)}%</td>
-                            <td>${(pair.score * 100).toFixed(1)}%</td>
-                        </tr>
-                    `).join('')}
-                </tbody>
-            </table>
-        `;
-    }
-}
-
-function calculateMWDeviation(userPeaks, compound) {
-    if (userPeaks.length === 0) return 'N/A';
-    const userMW = Math.max(...userPeaks.map(p => p.mz));
-    return (userMW - compound.mw).toFixed(3);
 }
 
 function resetAnalysis() {
     document.getElementById('resultsSection').classList.add('hidden');
     document.getElementById('inputSection').classList.remove('hidden');
-    
-    // Clear all inputs
-    document.getElementById('msInput').value = '';
-    document.getElementById('nmrInput').value = '';
-    document.getElementById('msCombined').value = '';
-    document.getElementById('nmrCombined').value = '';
-    
-    // Reset image
-    if (window.uploadedImage) {
-        window.uploadedImage = null;
-        document.getElementById('imagePreview').classList.add('hidden');
-        document.getElementById('uploadArea').classList.remove('hidden');
-    }
-    
-    // Reset steps
-    document.getElementById('procStep1').classList.add('active');
-    document.getElementById('procStep2').classList.remove('active');
-    document.getElementById('procStep3').classList.remove('active');
     document.getElementById('progressFill').style.width = '0%';
 }
 
@@ -616,47 +445,37 @@ function exportReport() {
     const topMatch = document.querySelector('.match-card h2');
     if (!topMatch) return;
     
-    const compoundName = topMatch.textContent;
-    const compound = spectralDatabase.find(c => c.name === compoundName);
-    
-    if (!compound) return;
-    
     const report = {
-        software: "PharmSpec AI - Spectral Database Matcher",
-        version: "2.0",
+        software: "PharmSpec AI",
+        version: "3.0",
         algorithm: "Cosine Similarity",
-        tolerance: "±0.5 m/z",
         date: new Date().toISOString(),
-        compound: compound,
-        validation: {
-            status: "VALIDATED",
-            confidence: parseFloat(document.querySelector('.confidence-value').textContent),
-            criteria: "Cosine >90%, Coverage >70%, MW <0.1 Da deviation"
-        }
+        compound_name: topMatch.textContent
     };
     
     const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `PharmSpec_Validation_Report_${compound.name.replace(/\s+/g, '_')}.json`;
+    a.download = `PharmSpec_Report_${Date.now()}.json`;
     a.click();
     URL.revokeObjectURL(url);
 }
 
 function displayDatabase() {
     const grid = document.getElementById('compoundGrid');
-    grid.innerHTML = spectralDatabase.map(c => `
+    if (!grid || !window.spectralDatabase) return;
+    
+    grid.innerHTML = spectralDatabase.slice(0, 12).map(c => `
         <div class="compound-card">
             <h4>${c.name}</h4>
             <p class="formula">${c.formula}</p>
             <p class="mw">MW: ${c.mw} g/mol</p>
             <p class="category">${c.category}</p>
-            <p class="cas">CAS: ${c.cas}</p>
         </div>
     `).join('');
 }
 
-console.log('🔬 PharmSpec AI v2.0 - Cosine Similarity Algorithm Loaded');
-console.log('📊 Database:', spectralDatabase.length, 'compounds');
+console.log('🔬 PharmSpec AI v3.0 - API Integration Loaded');
+console.log('📊 API Endpoint:', API_BASE_URL);
 console.log('🎯 Tolerance:', TOLERANCE_MZ, 'm/z');
